@@ -1,4 +1,5 @@
 from django.contrib.auth.models import User
+
 from rest_framework import serializers
 from rest_framework.reverse import reverse
 
@@ -103,9 +104,17 @@ class XFormListSerializer(serializers.Serializer):
 
 
 class XFormManifestSerializer(serializers.Serializer):
-    filename = serializers.ReadOnlyField(source='data_value')
+    filename = serializers.SerializerMethodField()
     hash = serializers.SerializerMethodField()
     downloadUrl = serializers.SerializerMethodField('get_url')
+
+    @check_obj
+    def get_filename(self, obj):
+        if obj.data_file:
+            return obj.data_value
+        else:
+            # The data_value is actually a URL, so extract the actual file
+            return obj.data_value.split('?')[0].split('/')[-1]
 
     @check_obj
     def get_url(self, obj):
