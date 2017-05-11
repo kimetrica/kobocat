@@ -1,14 +1,9 @@
-import glob
-import os
-from subprocess import check_call
-import sys
 import json
-import re
-import requests
+import os
+import sys
 
-from fabric.api import cd, env, prefix, run as run_
-from fabric.contrib import files
-from fabric.operations import put
+from fabric.api import cd, env, prefix, run
+
 
 DEPLOYMENTS = {}
 
@@ -19,13 +14,10 @@ if os.path.exists(deployments_file):
         DEPLOYMENTS.update(imported_deployments)
 
 
-def run(*args, **kwargs):
-    '''
-    Workaround for mangled output that's returned after sourcing
-    $NVM_DIR/nvm.sh
-    '''
+def run_no_pty(*args, **kwargs):
+    # Avoids control characters being returned in the output
     kwargs['pty'] = False
-    return run_(*args, **kwargs)
+    return run(*args, **kwargs)
 
 
 def kobo_workon(_virtualenv_name):
@@ -45,7 +37,7 @@ def check_key_filename(deployment_configs):
             deployment_configs['key_filename']
         )
         if not os.path.exists(deployment_configs['key_filename']):
-            exit_with_error("Cannot find required permissions file: %s" %
+            exit_with_error("Cannot find required SSH key file: %s" %
                             deployment_configs['key_filename'])
 
 
@@ -95,7 +87,8 @@ def deploy_ref(deployment_name, ref):
     with cd(env.kc_path):
         run("git fetch origin")
         # Make sure we're not moving to an older codebase
-        git_output = run('git rev-list {}..HEAD --count 2>&1'.format(ref))
+        git_output = run_no_pty(
+            'git rev-list {}..HEAD --count 2>&1'.format(ref))
         if int(git_output) > 0:
             raise Exception("The server's HEAD is already in front of the "
                 "commit to be deployed.")
@@ -103,7 +96,7 @@ def deploy_ref(deployment_name, ref):
         # detached. Perhaps consider using `git reset`.
         run('git checkout {}'.format(ref))
         # Report if the working directory is unclean.
-        git_output = run('git status --porcelain')
+        git_output = run_no_pty('git status --porcelain')
         if len(git_output):
             run('git status')
             print('WARNING: The working directory is unclean. See above.')
@@ -145,55 +138,3 @@ def deploy_ref(deployment_name, ref):
 
 def deploy(deployment_name, branch='master'):
     deploy_ref(deployment_name, 'origin/{}'.format(branch))
-
-
-def deploy_passing(deployment_name, branch='master'):
-    ''' Deploy the latest code on the given branch that's
-    been marked passing by Travis CI. '''
-    print 'Asking Travis CI for the hash of the latest passing commit...'
-    desired_commit = get_last_successfully_built_commit(branch)
-    print 'Found passing commit {} for branch {}!'.format(desired_commit,
-        branch)
-    deploy_ref(deployment_name, desired_commit)
-
-
-def get_last_successfully_built_commit(branch):
-    ''' Returns the hash of the latest successfully built commit
-    on the given branch according to Travis CI. '''
-
-    API_ENDPOINT='https://api.travis-ci.org/'
-    REPO_SLUG='kobotoolbox/kobocat'
-    COMMON_HEADERS={'accept': 'application/vnd.travis-ci.2+json'}
-
-    ''' Travis only lets us specify `number`, `after_number`, and `event_type`.
-    It'd be great to filter by state and branch, but it seems we can't
-    (http://docs.travis-ci.com/api/?http#builds). '''
-
-    request = requests.get(
-        '{}repos/{}/builds'.format(API_ENDPOINT, REPO_SLUG),
-        headers=COMMON_HEADERS
-    )
-    if request.status_code != 200:
-        raise Exception('Travis returned unexpected code {}.'.format(
-            request.status_code
-        ))
-    response = json.loads(request.text)
-
-    builds = response['builds']
-    commits = {commit['id']: commit for commit in response['commits']}
-
-    for build in builds:
-        if build['state'] != 'passed' or build['pull_request']:
-            # No interest in non-passing builds or PRs
-            continue
-        commit = commits[build['commit_id']]
-        if commit['branch'] == branch:
-            # Assumes the builds are in descending chronological order
-            if re.match('^[0-9a-f]+$', commit['sha']) is None:
-                raise Exception('Travis returned the invalid SHA {}.'.format(
-                    commit['sha']))
-            return commit['sha']
-
-    raise Exception("Couldn't find a passing build for the branch {}. "
-        "This could be due to pagination, in which case this code "
-        "must be made more robust!".format(branch))
