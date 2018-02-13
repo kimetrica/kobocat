@@ -20,7 +20,8 @@ pymongo==2.7.2
 lxml==3.4.0
 #-e git+https://github.com/onaio/pyxform.git@onaio#egg=pyxform
 # kobo fork supports csvs with utf, character escaping, etc.
--e git+https://github.com/kobotoolbox/pyxform.git@2.017.36#egg=pyxform
+#-e git+https://github.com/kobotoolbox/pyxform.git@2.017.36#egg=pyxform
+git+https://github.com/kimetrica/pyxform.git@bdm#egg=pyxform-dev
 django-reversion==2.0.8
 xlrd==0.9.3
 xlwt==0.7.5
