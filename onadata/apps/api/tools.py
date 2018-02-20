@@ -4,7 +4,9 @@ from datetime import datetime
 import numpy as np
 import inspect
 import re
+import time
 
+import logging
 from django import forms
 from django.conf import settings
 from django.core.files.storage import get_storage_class
@@ -415,8 +417,53 @@ def add_tags_to_instance(request, instance):
 
         if tags:
             for tag in tags:
-                instance.instance.tags.add(tag)
+                instance.tags.add(tag)
             instance.save()
+
+
+def add_validation_status_to_instance(request, instance):
+    """
+    Saves instance validation status if it's valid (belong to XForm/Asset validation statuses)
+
+    :param request: REST framework's Request object
+    :param instance: Instance object
+    :return: Boolean
+    """
+    validation_status_uid = request.data.get("validation_status__uid")
+    success = False
+
+    # Payload must contain validation_status property.
+    if validation_status_uid:
+
+        validation_status = get_validation_status(
+            validation_status_uid,instance.asset, request.user.username)
+        if validation_status:
+            instance.validation_status = validation_status
+            instance.save()
+            instance.parsed_instance.update_mongo()
+            success = True
+
+    return success
+
+
+def get_validation_status(validation_status_uid, asset, username):
+    # Validate validation_status value It must belong to asset statuses.
+    available_statuses = {status.get("uid"): status
+                          for status in asset.settings.get("validation_statuses")}
+
+    validation_status = {}
+
+    if validation_status_uid in available_statuses.keys():
+        available_status = available_statuses.get(validation_status_uid)
+        validation_status = {
+            "timestamp": int(time.time()),
+            "uid": validation_status_uid,
+            "by_whom": username,
+            "color": available_status.get("color"),
+            "label": available_status.get("label")
+        }
+
+    return validation_status
 
 
 def get_media_file_response(metadata):

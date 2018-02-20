@@ -17,7 +17,7 @@ from onadata.apps.logger.models import Note
 from onadata.apps.restservice.utils import call_service
 from onadata.libs.utils.common_tags import ID, UUID, ATTACHMENTS, GEOLOCATION,\
     SUBMISSION_TIME, MONGO_STRFTIME, BAMBOO_DATASET_ID, DELETEDAT, TAGS,\
-    NOTES, SUBMITTED_BY
+    NOTES, SUBMITTED_BY, VALIDATION_STATUS
 from onadata.libs.utils.decorators import apply_form_field_names
 from onadata.libs.utils.model_tools import queryset_iterator
 
@@ -46,7 +46,7 @@ def datetime_from_str(text):
 
 
 def dict_for_mongo(d):
-    for key, value in d.items():
+    for key, value in list(d.items()):
         if type(value) == list:
             value = [dict_for_mongo(e)
                      if type(e) == dict else e for e in value]
@@ -61,6 +61,13 @@ def dict_for_mongo(d):
         if _is_invalid_for_mongo(key):
             del d[key]
             d[_encode_for_mongo(key)] = value
+        # We want to restore nested objects. We don't want to replace keys which start or end with __
+        elif key.count("__") and not (key.startswith("__") or key.endswith("__")):
+            del d[key]
+            key_parts = [_encode_for_mongo(part) for part in key.split("__")]
+            new_key = ".".join(key_parts)
+            d[new_key] = value
+
     return d
 
 
@@ -114,54 +121,20 @@ class ParsedInstance(models.Model):
     @apply_form_field_names
     def query_mongo(cls, username, id_string, query, fields, sort, start=0,
                     limit=DEFAULT_LIMIT, count=False, hide_deleted=True):
-        fields_to_select = {cls.USERFORM_ID: 0}
-        # TODO: give more detailed error messages to 3rd parties
-        # using the API when json.loads fails
-        if isinstance(query, basestring):
-            query = json.loads(query, object_hook=json_util.object_hook)
-        query = query if query else {}
-        query = dict_for_mongo(query)
-        query[cls.USERFORM_ID] = u'%s_%s' % (username, id_string)
 
-        # check if query contains and _id and if its a valid ObjectID
-        if '_uuid' in query and ObjectId.is_valid(query['_uuid']):
-            query['_uuid'] = ObjectId(query['_uuid'])
+        cursor = cls._get_mongo_cursor(query, fields, hide_deleted, username, id_string)
 
-        if hide_deleted:
-            # display only active elements
-            # join existing query with deleted_at_query on an $and
-            query = {"$and": [query, {"_deleted_at": None}]}
+        if count:
+            return [{"count": cursor.count()}]
 
-        # fields must be a string array i.e. '["name", "age"]'
-        if isinstance(fields, basestring):
-            fields = json.loads(fields, object_hook=json_util.object_hook)
-        fields = fields if fields else []
-
-        # TODO: current mongo (2.0.4 of this writing)
-        # cant mix including and excluding fields in a single query
-        if type(fields) == list and len(fields) > 0:
-            fields_to_select = dict(
-                [(_encode_for_mongo(field), 1) for field in fields])
         if isinstance(sort, basestring):
             sort = json.loads(sort, object_hook=json_util.object_hook)
         sort = sort if sort else {}
 
-        cursor = xform_instances.find(query, fields_to_select)
-        if count:
-            return [{"count": cursor.count()}]
-
         if start < 0 or limit < 0:
             raise ValueError(_("Invalid start/limit params"))
 
-        cursor.skip(start).limit(limit)
-        if type(sort) == dict and len(sort) == 1:
-            sort_key = sort.keys()[0]
-            # TODO: encode sort key if it has dots
-            sort_dir = int(sort[sort_key])  # -1 for desc, 1 for asc
-            cursor.sort(_encode_for_mongo(sort_key), sort_dir)
-        # set batch size
-        cursor.batch_size = cls.DEFAULT_BATCHSIZE
-        return cursor
+        return cls._get_paginated_and_sorted_cursor(cursor, start, limit, sort)
 
     @classmethod
     @apply_form_field_names
@@ -199,29 +172,15 @@ class ParsedInstance(models.Model):
     def query_mongo_minimal(
             cls, query, fields, sort, start=0, limit=DEFAULT_LIMIT,
             count=False, hide_deleted=True):
-        fields_to_select = {cls.USERFORM_ID: 0}
-        # TODO: give more detailed error messages to 3rd parties
-        # using the API when json.loads fails
-        query = json.loads(
-            query, object_hook=json_util.object_hook) if query else {}
-        query = dict_for_mongo(query)
-        if hide_deleted:
-            # display only active elements
-            # join existing query with deleted_at_query on an $and
-            query = {"$and": [query, {"_deleted_at": None}]}
-        # fields must be a string array i.e. '["name", "age"]'
-        fields = json.loads(
-            fields, object_hook=json_util.object_hook) if fields else []
-        # TODO: current mongo (2.0.4 of this writing)
-        # cant mix including and excluding fields in a single query
-        if type(fields) == list and len(fields) > 0:
-            fields_to_select = dict(
-                [(_encode_for_mongo(field), 1) for field in fields])
-        sort = json.loads(
-            sort, object_hook=json_util.object_hook) if sort else {}
-        cursor = xform_instances.find(query, fields_to_select)
+
+        cursor = cls._get_mongo_cursor(query, fields, hide_deleted)
+
         if count:
             return [{"count": cursor.count()}]
+
+        if isinstance(sort, basestring):
+            sort = json.loads(sort, object_hook=json_util.object_hook)
+        sort = sort if sort else {}
 
         if start < 0 or limit < 0:
             raise ValueError(_("Invalid start/limit params"))
@@ -229,12 +188,90 @@ class ParsedInstance(models.Model):
         if limit > cls.DEFAULT_LIMIT:
             limit = cls.DEFAULT_LIMIT
 
+        return cls._get_paginated_and_sorted_cursor(cursor, start, limit, sort)
+
+    @classmethod
+    @apply_form_field_names
+    def query_mongo_no_paging(cls, query, fields, count=False, hide_deleted=True):
+
+        cursor = cls._get_mongo_cursor(query, fields, hide_deleted)
+
+        if count:
+            return [{"count": cursor.count()}]
+        else:
+            return cursor
+
+    @classmethod
+    def _get_mongo_cursor(cls, query, fields, hide_deleted, username=None, id_string=None):
+        """
+        Returns a Mongo cursor based on the query.
+
+        :param query: JSON string
+        :param fields: Array string
+        :param hide_deleted: boolean
+        :param username: string
+        :param id_string: string
+        :return: pymongo Cursor
+        """
+        fields_to_select = {cls.USERFORM_ID: 0}
+        # TODO: give more detailed error messages to 3rd parties
+        # using the API when json.loads fails
+        if isinstance(query, basestring):
+            query = json.loads(query, object_hook=json_util.object_hook)
+        query = query if query else {}
+        query = dict_for_mongo(query)
+
+        if username and id_string:
+            query[cls.USERFORM_ID] = u'%s_%s' % (username, id_string)
+            # check if query contains and _id and if its a valid ObjectID
+            if '_uuid' in query and ObjectId.is_valid(query['_uuid']):
+                query['_uuid'] = ObjectId(query['_uuid'])
+
+        if hide_deleted:
+            # display only active elements
+            # join existing query with deleted_at_query on an $and
+            query = {"$and": [query, {"_deleted_at": None}]}
+
+        # fields must be a string array i.e. '["name", "age"]'
+        if isinstance(fields, basestring):
+            fields = json.loads(fields, object_hook=json_util.object_hook)
+        fields = fields if fields else []
+
+        # TODO: current mongo (2.0.4 of this writing)
+        # cant mix including and excluding fields in a single query
+        if type(fields) == list and len(fields) > 0:
+            fields_to_select = dict(
+                [(_encode_for_mongo(field), 1) for field in fields])
+
+        return xform_instances.find(query, fields_to_select)
+
+    @classmethod
+    def _get_paginated_and_sorted_cursor(cls, cursor, start, limit, sort):
+        """
+        Applies pagination and sorting on mongo cursor.
+
+        :param mongo_cursor: pymongo.cursor.Cursor
+        :param start: integer
+        :param limit: integer
+        :param sort: dict
+        :return: pymongo.cursor.Cursor
+        """
         cursor.skip(start).limit(limit)
+
         if type(sort) == dict and len(sort) == 1:
             sort_key = sort.keys()[0]
-            # TODO: encode sort key if it has dots
             sort_dir = int(sort[sort_key])  # -1 for desc, 1 for asc
-            cursor.sort(_encode_for_mongo(sort_key), sort_dir)
+            # Mongo doesn't support keys with dot. We must use _encode_for_mongo to replace
+            # $ and . to their encoded counterparts.
+            # Because Mongo uses dots to represent nested JSON level, we use a home-syntax to make a difference
+            # between keys with dots and nested JSON objects.
+            # Strings with double underscores will be a nested JSON object otherwise will be a key with dots
+            # my__string vs my.string
+
+            sort_key_parts = [_encode_for_mongo(part) for part in sort_key.split("__")]
+            encoded_sort_key = ".".join(sort_key_parts)
+            cursor.sort(encoded_sort_key, sort_dir)
+
         # set batch size
         cursor.batch_size = cls.DEFAULT_BATCHSIZE
         return cursor
@@ -255,6 +292,7 @@ class ParsedInstance(models.Model):
                 MONGO_STRFTIME),
             TAGS: list(self.instance.tags.names()),
             NOTES: self.get_notes(),
+            VALIDATION_STATUS: self.instance.get_validation_status(),
             SUBMITTED_BY: self.instance.user.username
             if self.instance.user else None
         }
@@ -272,6 +310,11 @@ class ParsedInstance(models.Model):
             update_mongo_instance.apply_async((), {"record": d})
         else:
             update_mongo_instance(d)
+
+    @staticmethod
+    def bulk_update_validation_statuses(query, validation_status):
+        return xform_instances.update(query, {"$set":
+            {VALIDATION_STATUS: validation_status}}, multi=True)
 
     def to_dict(self):
         if not hasattr(self, "_dict_cache"):

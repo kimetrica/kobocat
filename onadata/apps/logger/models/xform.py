@@ -105,6 +105,7 @@ class XForm(BaseModel):
             ("report_xform", _("Can make submissions to the form")),
             ("move_xform", _(u"Can move form between projects")),
             ("transfer_xform", _(u"Can transfer form ownership.")),
+            ("validate_xform", _(u"Can validate submissions.")),
         )
 
     def file_name(self):
@@ -306,6 +307,24 @@ class XForm(BaseModel):
         else:
             return None
 
+    @property
+    def settings(self):
+        """
+        Mimic Asset settings.
+        :return: Object
+        """
+        # As soon as we need to add custom validation statuses in Asset settings,
+        # validation in add_validation_status_to_instance
+        # (kobocat/onadata/apps/api/tools.py) should still work
+        default_validation_statuses = getattr(settings, "DEFAULT_VALIDATION_STATUSES", [])
+
+        # Later purpose, default_validation_statuses could be merged with a custom validation statuses dict
+        # for example:
+        #   self._validation_statuses.update(default_validation_statuses)
+
+        return {
+            "validation_statuses": default_validation_statuses
+        }
 
 def update_profile_num_submissions(sender, instance, **kwargs):
     profile_qs = User.profile.get_queryset()
