@@ -17,7 +17,7 @@ from onadata.apps.logger.models import Note
 from onadata.apps.restservice.utils import call_service
 from onadata.libs.utils.common_tags import ID, UUID, ATTACHMENTS, GEOLOCATION,\
     SUBMISSION_TIME, MONGO_STRFTIME, BAMBOO_DATASET_ID, DELETEDAT, TAGS,\
-    NOTES, SUBMITTED_BY, VALIDATION_STATUS
+    NOTES, SUBMITTED_BY, VALIDATION_STATUS, NESTED_RESERVED_PROPERTIES
 from onadata.libs.utils.decorators import apply_form_field_names
 from onadata.libs.utils.model_tools import queryset_iterator
 
@@ -44,29 +44,45 @@ def datetime_from_str(text):
         return None
     return dt
 
-
-def dict_for_mongo(d):
+def dict_for_mongo(d, reading=False):
     for key, value in list(d.items()):
         if type(value) == list:
-            value = [dict_for_mongo(e)
+            value = [dict_for_mongo(e, reading=reading)
                      if type(e) == dict else e for e in value]
         elif type(value) == dict:
-            value = dict_for_mongo(value)
+            value = dict_for_mongo(value, reading=reading)
         elif key == '_id':
             try:
                 d[key] = int(value)
             except ValueError:
                 # if it is not an int don't convert it
                 pass
-        if _is_invalid_for_mongo(key):
+
+        if _is_nested_reserved_property(key):
+            # If we want to write into Mongo, we need to transform the dot delimited string into a dict
+            # Otherwise, for reading, Mongo query engine reads dot delimited string as a nested object.
+            # Drawback, if a user uses a reserved property with dots, it will be converted as well.
+            if not reading and key.count(".") > 0:
+                tree = {}
+                t = tree
+                parts = key.split(".")
+                last_index = len(parts) - 1
+                for index, part in enumerate(parts):
+                    v = value if index == last_index else {}
+                    t = t.setdefault(part, v)
+                del d[key]
+                first_part = parts[0]
+                if first_part not in d:
+                    d[first_part] = {}
+
+                # We update the main dict with new dict.
+                # We use dict_for_mongo again on the dict to ensure, no invalid characters are children
+                # elements
+                d[first_part].update(dict_for_mongo(tree[first_part]))
+
+        elif _is_invalid_for_mongo(key):
             del d[key]
             d[_encode_for_mongo(key)] = value
-        # We want to restore nested objects. We don't want to replace keys which start or end with __
-        elif key.count("__") and not (key.startswith("__") or key.endswith("__")):
-            del d[key]
-            key_parts = [_encode_for_mongo(part) for part in key.split("__")]
-            new_key = ".".join(key_parts)
-            d[new_key] = value
 
     return d
 
@@ -81,6 +97,19 @@ def _decode_from_mongo(key):
     re_dot = re.compile(r"\%s" % base64.b64encode("."))
     return reduce(lambda s, c: c[0].sub(c[1], s),
                   [(re_dollar, '$'), (re_dot, '.')], key)
+
+
+def _is_nested_reserved_property(k):
+    """
+    Checks if key starts with one of variables values declared in NESTED_RESERVED_PROPERTIES
+
+    :param k: string
+    :return: boolean
+    """
+    for reserved_property in NESTED_RESERVED_PROPERTIES:
+        if k.startswith(u"{}.".format(reserved_property)):
+            return True
+    return False
 
 
 def _is_invalid_for_mongo(key):
@@ -219,7 +248,7 @@ class ParsedInstance(models.Model):
         if isinstance(query, basestring):
             query = json.loads(query, object_hook=json_util.object_hook)
         query = query if query else {}
-        query = dict_for_mongo(query)
+        query = dict_for_mongo(query, reading=True)
 
         if username and id_string:
             query[cls.USERFORM_ID] = u'%s_%s' % (username, id_string)
