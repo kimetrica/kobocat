@@ -1,2 +1,5 @@
-boto==2.46.1
-django-storages==1.5.2
+boto==2.48.0
+
+# Change this back to the PyPI package once
+# https://github.com/jschneier/django-storages/pull/506 is merged and released
+-e git+https://github.com/jnm/django-storages@s3boto-s3boto3-truncate-buffer-after-uploading#egg=django_storages

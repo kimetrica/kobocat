@@ -85,6 +85,9 @@ STATIC_URL = '/static/'
 # Enketo URL.
 # Configurable settings.
 ENKETO_URL = os.environ.get('ENKETO_URL', 'https://enketo.kobotoolbox.org')
+KOBOCAT_URL = os.environ.get('KOBOCAT_URL', 'https://kc.kobotoolbox.org')
+
+
 ENKETO_URL= ENKETO_URL.rstrip('/')
 ENKETO_API_TOKEN = os.environ.get('ENKETO_API_TOKEN', 'enketorules')
 ENKETO_VERSION= os.environ.get('ENKETO_VERSION', 'Legacy').lower()
@@ -114,7 +117,18 @@ ENKETO_API_INSTANCE_IFRAME_URL = ENKETO_URL + ENKETO_API_ROOT + ENKETO_API_ENDPO
 KPI_URL = os.environ.get('KPI_URL', False)
 
 # specifically for site urls sent to enketo for form retrieval
+# `ENKETO_PROTOCOL` variable is overridden when internal domain name is used.
+# All internal communications between containers must be HTTP only.
 ENKETO_PROTOCOL = os.environ.get('ENKETO_PROTOCOL', 'https')
+
+# These 2 variables are needed to detect whether the ENKETO_PROTOCOL should overwritten or not.
+# See method `_get_form_url` in `onadata/libs/utils/viewer_tools.py`
+KOBOCAT_INTERNAL_HOSTNAME = "{}.{}".format(
+    os.environ.get("KOBOCAT_PUBLIC_SUBDOMAIN", "kc"),
+    os.environ.get("INTERNAL_DOMAIN_NAME", "docker.internal"))
+KOBOCAT_PUBLIC_HOSTNAME = "{}.{}".format(
+    os.environ.get("KOBOCAT_PUBLIC_SUBDOMAIN", "kc"),
+    os.environ.get("PUBLIC_DOMAIN_NAME", "kobotoolbox.org"))
 
 # Default value for the `UserProfile.require_auth` attribute. Even though it's
 # set in kc_environ, include it here as well to support legacy installations
@@ -309,7 +323,10 @@ AUTHENTICATION_BACKENDS = (
     'guardian.backends.ObjectPermissionBackend',
 )
 
-# Settings for Django Registration
+# All registration should be done through KPI, so Django Registration should
+# never be enabled here. It'd be best to remove all references to the
+# `registration` app in the future.
+REGISTRATION_OPEN = False
 ACCOUNT_ACTIVATION_DAYS = 1
 
 
@@ -440,7 +457,7 @@ CELERYD_TASK_SOFT_TIME_LIMIT = int(os.environ.get(
     'CELERYD_TASK_SOFT_TIME_LIMIT', 1800))
 
 # duration to keep zip exports before deletion (in seconds)
-ZIP_EXPORT_COUNTDOWN = 3600  # 1 hour
+ZIP_EXPORT_COUNTDOWN = 24 * 60 * 60
 
 # default content length for submission requests
 DEFAULT_CONTENT_LENGTH = 10000000

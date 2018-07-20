@@ -126,6 +126,7 @@ AWS_ACCESS_KEY_ID = os.environ.get('KOBOCAT_AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.environ.get('KOBOCAT_AWS_SECRET_ACCESS_KEY')
 AWS_STORAGE_BUCKET_NAME = os.environ.get('KOBOCAT_AWS_STORAGE_BUCKET_NAME')
 AWS_DEFAULT_ACL = 'private'
+AWS_S3_FILE_BUFFER_SIZE = 50 * 1024 * 1024
 
 GOOGLE_ANALYTICS_PROPERTY_ID = os.environ.get("GOOGLE_ANALYTICS_TOKEN", False)
 GOOGLE_ANALYTICS_DOMAIN = "auto"
@@ -216,6 +217,11 @@ if 'RAVEN_DSN' in os.environ:
                     'level': 'DEBUG',
                     'handlers': ['console'],
                     'propagate': False,
+                },
+                'console_logger': {
+                    'handlers': ['console'],
+                    'level': 'DEBUG',
+                    'propagate': True
                 },
                 'sentry.errors': {
                     'level': 'DEBUG',
