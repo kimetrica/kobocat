@@ -1,19 +1,18 @@
 import os
 import traceback
-import requests
 import zipfile
-
 from tempfile import NamedTemporaryFile
 from xml.dom import minidom
 
+import requests
 from django.conf import settings
 from django.core.files.storage import get_storage_class
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.core.mail import mail_admins
+from django.core.urlresolvers import reverse
 from django.utils.translation import ugettext as _
 
 from onadata.libs.utils import common_tags
-
 
 SLASH = u"/"
 
@@ -50,6 +49,7 @@ def image_urls(instance):
         urls.append(url)
     return urls
 
+
 def image_urls_dict(instance):
     default_storage = get_storage_class()()
     urls = dict()
@@ -66,6 +66,7 @@ def image_urls_dict(instance):
             url = settings.KOBOCAT_URL + url
         urls[file_basename] = url
     return urls
+
 
 def parse_xform_instance(xml_str):
     """
@@ -261,7 +262,7 @@ def _get_form_url(request, username, protocol='https'):
     # Make sure protocol is enforced to `http` when calling `kc` internally
     protocol = "http" if is_call_internal else protocol
 
-    return '%s://%s/%s' % (protocol, http_host, username)
+    return request.build_absolute_uri(reverse('user_profile', kwargs={'username': username}))
 
 
 def get_enketo_edit_url(request, instance, return_url):
