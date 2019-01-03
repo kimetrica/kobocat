@@ -10,7 +10,7 @@ from zipfile import ZipFile
 
 from bson import json_util
 from django.conf import settings
-from django.core.files.base import File, ContentFile
+from django.core.files.base import File
 from django.core.files.temp import NamedTemporaryFile
 from django.core.files.storage import get_storage_class
 from django.contrib.auth.models import User
@@ -840,12 +840,12 @@ def generate_attachments_zip_export(
         export_type,
         filename)
 
-    export_filename = get_storage_class()().save(file_path, ContentFile(''))
-
-    with get_storage_class()().open(file_path, 'wb') as destination_file:
-        create_attachments_zipfile(
-            attachments,
-            temporary_file=destination_file, # not "temporary" anymore...
+    with NamedTemporaryFile(
+        "wb+", prefix="media_zip_export_", suffix=".zip"
+    ) as temporary_file:
+        create_attachments_zipfile(attachments, temporary_file=temporary_file)
+        export_filename = get_storage_class()().save(
+            file_path, File(temporary_file, file_path)
         )
 
     dir_name, basename = os.path.split(export_filename)
